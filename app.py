@@ -26,10 +26,9 @@ uploaded_file = st.sidebar.file_uploader("Glisser le fichier Export_Resine_Cible
 
 if uploaded_file:
     # 1. Lecture Robuste
-    # On tente de lire avec virgule (standard)
     try:
         df = pd.read_csv(uploaded_file, sep=",")
-        if len(df.columns) < 2: # Si ça rate, on tente le point-virgule
+        if len(df.columns) < 2: 
             uploaded_file.seek(0)
             df = pd.read_csv(uploaded_file, sep=";")
     except:
@@ -101,7 +100,14 @@ if uploaded_file:
 
     st.subheader("Σ Totaux Consolidés (SAP)")
     df_summary = pd.DataFrame(summary_data)
-    st.dataframe(df_summary.style.format("{:.2f}").background_gradient(cmap="Blues"), use_container_width=False)
+    
+    # CORRECTION ICI : On ne formate que les colonnes numériques
+    format_mapping = {"Total ISO (kg)": "{:.2f}", "Total POL (kg)": "{:.2f}"}
+    
+    st.dataframe(
+        df_summary.style.format(format_mapping).background_gradient(cmap="Blues", subset=["Total ISO (kg)", "Total POL (kg)"]),
+        use_container_width=False
+    )
 
     st.divider()
     st.subheader("🔍 Détail des compteurs")
