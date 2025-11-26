@@ -24,7 +24,7 @@ st.title("🏭 Suivi Consommation Résine")
 # --- 2. CONFIGURATION GITHUB (A MODIFIER !) ---
 # Remplace le lien ci-dessous par le lien "Raw" de ton fichier sur GitHub
 # Exemple : https://raw.githubusercontent.com/TonPseudo/TonRepo/main/Export_Resine_Cible.csv
-CSV_URL = "https://raw.githubusercontent.com/TonPseudo/TonRepo/main/Export_Resine_Cible.csv"
+CSV_URL = "https://raw.githubusercontent.com/nicoconepala-cyber/app-resine/refs/heads/main/Export_Resine_Cible.csv"
 
 # --- 3. FONCTION DE CHARGEMENT ROBUSTE ---
 @st.cache_data(ttl=3600) # Garde les données en mémoire 1h pour aller plus vite
