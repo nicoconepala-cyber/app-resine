@@ -18,22 +18,22 @@ TAG_MAPPING = {
              "LDIn1P_T2_ConsoMasse_PO_Tot", "LDIn2P_T2_ConsoMasse_PO_Tot"]
 }
 
-st.set_page_config(page_title="Suivi Résine (Auto)", layout="wide")
-st.title("🏭 Suivi Consommation Résine")
+# Configuration de la page
+st.set_page_config(page_title="Suivi Résine (Auto)", layout="wide", page_icon="🏭")
+st.title("🏭 Dashboard Consommation Résine")
 
-# --- 2. CONFIGURATION GITHUB (A MODIFIER !) ---
-# Remplace le lien ci-dessous par le lien "Raw" de ton fichier sur GitHub
-# Exemple : https://raw.githubusercontent.com/TonPseudo/TonRepo/main/Export_Resine_Cible.csv
+# --- 2. CONFIGURATION GITHUB ---
+# Ton URL spécifique
 CSV_URL = "https://raw.githubusercontent.com/nicoconepala-cyber/app-resine/refs/heads/main/Export_Resine_Cible.csv"
 
 # --- 3. FONCTION DE CHARGEMENT ROBUSTE ---
-@st.cache_data(ttl=3600) # Garde les données en mémoire 1h pour aller plus vite
+@st.cache_data(ttl=3600) # Cache de 1h
 def load_data(url):
     try:
-        # Essai 1 : Séparateur virgule (Standard PowerShell)
+        # Essai 1 : Séparateur virgule
         df = pd.read_csv(url, sep=",")
         if len(df.columns) < 2:
-            # Essai 2 : Séparateur point-virgule (Si Excel français s'en mêle)
+            # Essai 2 : Séparateur point-virgule
             df = pd.read_csv(url, sep=";")
         return df
     except Exception as e:
@@ -42,7 +42,6 @@ def load_data(url):
 # --- 4. INTERFACE & LOGIQUE ---
 st.sidebar.header("1. Connexion Données")
 
-# Bouton pour forcer la mise à jour si besoin
 if st.sidebar.button("🔄 Rafraîchir les données"):
     st.cache_data.clear()
 
@@ -59,20 +58,20 @@ if df is not None:
         st.error(f"Colonnes manquantes ! Colonnes trouvées : {list(df.columns)}")
         st.stop()
 
-    # B. Conversion des Dates (Format Français géré)
+    # B. Conversion des Dates
     df['Date_Cible'] = pd.to_datetime(df['Date_Cible'], dayfirst=True, errors='coerce')
     df = df.dropna(subset=['Date_Cible'])
 
-    # C. Nettoyage des Nombres (Virgules, Espaces...)
+    # C. Nettoyage des Nombres
     def clean_currency(x):
         if isinstance(x, str):
-            x = x.replace(',', '.') # Remplace virgule par point
-            x = x.replace(' ', '')  # Enlève les espaces
-            x = ''.join(c for c in x if c.isdigit() or c == '.') # Garde que les chiffres
+            x = x.replace(',', '.')
+            x = x.replace(' ', '')
+            x = ''.join(c for c in x if c.isdigit() or c == '.')
         return x
 
     df['Valeur_Clean'] = df['Valeur'].apply(clean_currency)
-    # Conversion en Kg (Division par 1000)
+    # Conversion en Kg
     df['Valeur_Kg'] = pd.to_numeric(df['Valeur_Clean'], errors='coerce').fillna(0) / 1000
 
     # D. Logique "Journée de Production"
@@ -93,17 +92,20 @@ if df is not None:
         st.warning("Aucune date valide trouvée.")
         st.stop()
         
-    selected_date = st.sidebar.selectbox("Choisir la Journée de Production :", dates_dispo)
+    selected_date = st.sidebar.selectbox("📅 Choisir la Journée de Production :", dates_dispo)
     
     # Filtrage sur la date choisie
     df_jour = df[df['Jour_Production'] == selected_date]
 
-    # --- 6. CALCULS ET TABLEAUX ---
-    st.markdown(f"### 📅 Journée du **{selected_date.strftime('%d/%m/%Y')}**")
-    st.caption("Données consolidées : 13h30 (J), 21h30 (J) et 05h30 (J+1)")
-
+    # --- 6. TABLEAU DE BORD (AMÉLIORÉ) ---
+    st.markdown(f"### Rapport du **{selected_date.strftime('%d/%m/%Y')}**")
+    
     summary_data = []
     ateliers_noms = {"CIn": "FX1", "FIn": "FX2", "JInj": "FX3", "LDIn": "FX4"}
+
+    # Variables pour les KPIs globaux
+    total_iso_global = 0
+    total_pol_global = 0
 
     for atelier_code, display_name in ateliers_noms.items():
         tags_atelier = TAG_MAPPING.get(atelier_code, [])
@@ -112,48 +114,79 @@ if df is not None:
         iso_tot = df_atelier[df_atelier['TagName'].str.contains("_ISO_")]['Valeur_Kg'].sum()
         pol_tot = df_atelier[df_atelier['TagName'].str.contains("_PO_")]['Valeur_Kg'].sum()
         
+        # Cumul global
+        total_iso_global += iso_tot
+        total_pol_global += pol_tot
+
         summary_data.append({
             "Atelier": display_name,
             "Total ISO (kg)": iso_tot,
-            "Total POL (kg)": pol_tot
+            "Total POL (kg)": pol_tot,
+            "Total (kg)": iso_tot + pol_tot
         })
 
-    # Tableau Résumé (SAP)
-    st.subheader("Σ Totaux Consolidés (SAP)")
+    total_journee = total_iso_global + total_pol_global
+
+    # --- A. ZONE KPIS (Indicateurs Clés en haut de page) ---
+    col1, col2, col3 = st.columns(3)
+    col1.metric("🌍 Consommation Totale", f"{total_journee:,.0f} kg")
+    col2.metric("🔵 Total ISO", f"{total_iso_global:,.0f} kg")
+    col3.metric("🔴 Total POL", f"{total_pol_global:,.0f} kg")
+
+    st.divider()
+
+    # --- B. ZONE GRAPHIQUE & TABLEAU ---
+    col_graph, col_tab = st.columns([1, 1]) 
+    
     df_summary = pd.DataFrame(summary_data)
-    
-    # Formatage ciblé (Uniquement sur les colonnes numériques pour éviter le crash)
-    format_mapping = {"Total ISO (kg)": "{:.2f}", "Total POL (kg)": "{:.2f}"}
-    
-    st.dataframe(
-        df_summary.style.format(format_mapping).background_gradient(cmap="Blues", subset=["Total ISO (kg)", "Total POL (kg)"]),
-        use_container_width=False
+
+    with col_graph:
+        st.subheader("📊 Répartition par Atelier")
+        # Préparation des données pour le graphique (Index = Atelier)
+        chart_data = df_summary.set_index("Atelier")[["Total ISO (kg)", "Total POL (kg)"]]
+        st.bar_chart(chart_data, color=["#36a2eb", "#ff6384"]) # Bleu et Rouge
+
+    with col_tab:
+        st.subheader("📋 Synthèse Chiffrée")
+        format_mapping = {"Total ISO (kg)": "{:.2f}", "Total POL (kg)": "{:.2f}", "Total (kg)": "{:.2f}"}
+        st.dataframe(
+            df_summary.style.format(format_mapping).background_gradient(cmap="Blues", subset=["Total (kg)"]),
+            use_container_width=True,
+            hide_index=True
+        )
+
+    # --- C. EXPORT EXCEL/CSV ---
+    st.divider()
+    csv_export = df_summary.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="📥 Télécharger ce rapport en CSV",
+        data=csv_export,
+        file_name=f"Rapport_Resine_{selected_date}.csv",
+        mime="text/csv",
     )
 
-    # Tableau Détail (Preuve)
-    st.divider()
-    st.subheader("🔍 Détail des compteurs")
-    
-    pivot = df_jour.pivot_table(
-        index="TagName", 
-        columns="Heure", 
-        values="Valeur_Kg", 
-        aggfunc='sum'
-    ).fillna(0)
+    # --- D. DÉTAIL TECHNIQUE (Masqué par défaut) ---
+    with st.expander("🔍 Voir le détail technique des compteurs (Preuve)"):
+        st.caption("Données consolidées : 13h30 (J), 21h30 (J) et 05h30 (J+1)")
+        pivot = df_jour.pivot_table(
+            index="TagName", 
+            columns="Heure", 
+            values="Valeur_Kg", 
+            aggfunc='sum'
+        ).fillna(0)
 
-    # Réordonner les colonnes pour la logique visuelle
-    cols_ordre = [c for c in ["13:30:00", "21:30:00", "05:30:00"] if c in pivot.columns]
-    if cols_ordre:
-        pivot = pivot[cols_ordre]
+        cols_ordre = [c for c in ["13:30:00", "21:30:00", "05:30:00"] if c in pivot.columns]
+        if cols_ordre:
+            pivot = pivot[cols_ordre]
 
-    st.dataframe(pivot.style.format("{:.2f}"))
+        st.dataframe(pivot.style.format("{:.2f}"))
 
 else:
-    # Message si l'URL ne fonctionne pas encore
+    # Message d'erreur si chargement impossible
     st.info("👋 Bonjour !")
     st.warning(f"Impossible de lire le fichier à l'adresse : {CSV_URL}")
     st.markdown("""
     **Pour corriger cela :**
     1. Assurez-vous que le script PowerShell a bien tourné au moins une fois.
-    2. Vérifiez que la variable `CSV_URL` dans le code `app.py` correspond bien à votre fichier sur GitHub (bouton 'Raw').
+    2. Vérifiez le lien GitHub dans le code.
     """)
