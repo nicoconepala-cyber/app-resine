@@ -1,46 +1,144 @@
 import streamlit as st
 import pandas as pd
-import datetime
+import numpy as np
 
-# --- 1. CONFIGURATION DES TAGS ---
-TAG_MAPPING = {
-    "CIn": ["CIn1P_T1_ConsoMasse_ISO_Tot", "CIn1P_T1_ConsoMasse_PO_Tot", 
-            "CIn1P_T2_ConsoMasse_ISO_Tot", "CIn1P_T2_ConsoMasse_PO_Tot"],
-    "FIn": ["FIn1P_T1_ConsoMasse_ISO_Tot", "FIn2P_T1_ConsoMasse_ISO_Tot",
-            "FIn1P_T1_ConsoMasse_PO_Tot", "FIn2P_T1_ConsoMasse_PO_Tot",
-            "FIn1P_T2_ConsoMasse_ISO_Tot", "FIn2P_T2_ConsoMasse_ISO_Tot",
-            "FIn1P_T2_ConsoMasse_PO_Tot", "FIn2P_T2_ConsoMasse_PO_Tot"],
-    "JInj": ["JInjP_T1_ConsoMasse_ISO_Tot", "JInjP_T1_ConsoMasse_PO_Tot",
-             "JInjP_T2_ConsoMasse_ISO_Tot", "JInjP_T2_ConsoMasse_PO_Tot"],
-    "LDIn": ["LDIn1P_T1_ConsoMasse_ISO_Tot", "LDIn2P_T1_ConsoMasse_ISO_Tot",
-             "LDIn1P_T1_ConsoMasse_PO_Tot", "LDIn2P_T1_ConsoMasse_PO_Tot",
-             "LDIn1P_T2_ConsoMasse_ISO_Tot", "LDIn2P_T2_ConsoMasse_ISO_Tot",
-             "LDIn1P_T2_ConsoMasse_PO_Tot", "LDIn2P_T2_ConsoMasse_PO_Tot"]
+# --- CONFIGURATION ATELIERS (V4) ---
+# Attention aux majuscules : CIk, FIk, JIk, LDIk
+CONFIG_ATELIERS = {
+    "FX1 (CIn)": {
+        "Lot_Tag": "CIk3M_Palett_NumLot",
+        "Resin_Tags": ["CIn1P_T1_ConsoMasse_ISO_Tot", "CIn1P_T1_ConsoMasse_PO_Tot", 
+                       "CIn1P_T2_ConsoMasse_ISO_Tot", "CIn1P_T2_ConsoMasse_PO_Tot"]
+    },
+    "FX2 (FIn)": {
+        "Lot_Tag": "FIk3M_Palett_NumLot",
+        "Resin_Tags": ["FIn1P_T1_ConsoMasse_ISO_Tot", "FIn2P_T1_ConsoMasse_ISO_Tot",
+                       "FIn1P_T1_ConsoMasse_PO_Tot", "FIn2P_T1_ConsoMasse_PO_Tot",
+                       "FIn1P_T2_ConsoMasse_ISO_Tot", "FIn2P_T2_ConsoMasse_ISO_Tot",
+                       "FIn1P_T2_ConsoMasse_PO_Tot", "FIn2P_T2_ConsoMasse_PO_Tot"]
+    },
+    "FX3 (JInj)": {
+        "Lot_Tag": "JIk3M_Palett_NumLot",
+        "Resin_Tags": ["JInjP_T1_ConsoMasse_ISO_Tot", "JInjP_T1_ConsoMasse_PO_Tot",
+                       "JInjP_T2_ConsoMasse_ISO_Tot", "JInjP_T2_ConsoMasse_PO_Tot"]
+    },
+    "FX4 (LDIn)": {
+        "Lot_Tag": "LDIk3M_Palett_NumLot",
+        "Resin_Tags": ["LDIn1P_T1_ConsoMasse_ISO_Tot", "LDIn2P_T1_ConsoMasse_ISO_Tot",
+                       "LDIn1P_T1_ConsoMasse_PO_Tot", "LDIn2P_T1_ConsoMasse_PO_Tot",
+                       "LDIn1P_T2_ConsoMasse_ISO_Tot", "LDIn2P_T2_ConsoMasse_ISO_Tot",
+                       "LDIn1P_T2_ConsoMasse_PO_Tot", "LDIn2P_T2_ConsoMasse_PO_Tot"]
+    }
 }
 
-# Configuration de la page
-st.set_page_config(page_title="Suivi Résine (Auto)", layout="wide", page_icon="🏭")
-st.title("🏭 Dashboard Consommation Résine")
+st.set_page_config(page_title="Suivi Lots & Résine", layout="wide", page_icon="📦")
+st.title("📦 Suivi Résine par Ordre de Fabrication")
 
-# --- 2. CONFIGURATION GITHUB ---
-# Ton URL spécifique
+# --- CHARGEMENT DONNEES ---
+# ⚠️ Vérifie que c'est bien le bon lien vers "Export_Resine_Smart.csv"
 CSV_URL = "https://raw.githubusercontent.com/nicoconepala-cyber/app-resine/refs/heads/main/Export_Resine_Cible.csv"
 
-# --- 3. FONCTION DE CHARGEMENT ROBUSTE ---
-@st.cache_data(ttl=3600) # Cache de 1h
+@st.cache_data(ttl=900)
 def load_data(url):
     try:
-        # Essai 1 : Séparateur virgule
+        # Lecture flexible (virgule ou point-virgule)
         df = pd.read_csv(url, sep=",")
-        if len(df.columns) < 2:
-            # Essai 2 : Séparateur point-virgule
+        if len(df.columns) < 2: 
             df = pd.read_csv(url, sep=";")
-        return df
+        
+        # Nettoyage des noms de colonnes
+        df.columns = [c.strip().replace('"', '') for c in df.columns]
+        
+        # Conversion DateTime
+        df['DateTime'] = pd.to_datetime(df['DateTime'])
+        
+        # Nettoyage des valeurs numériques
+        def clean_val(x):
+            try:
+                if isinstance(x, str):
+                    return float(x.replace(',', '.').replace(' ', ''))
+                return float(x)
+            except:
+                return 0.0
+        
+        df['Value'] = df['Value'].apply(clean_val)
+        return df.sort_values('DateTime')
     except Exception as e:
         return None
 
-# --- 4. INTERFACE & LOGIQUE ---
-st.sidebar.header("1. Connexion Données")
+# --- ALGORITHME DE CALCUL INTELLIGENT ---
+def calculate_smart_consumption(df_all, lot_tag, resin_tags):
+    results = []
+    
+    # 1. Identifier les Changements de Lot (Trigger)
+    # On ne regarde QUE le tag de lot de l'atelier sélectionné
+    df_lots = df_all[(df_all['TagName'] == lot_tag) & (df_all['Type'] == 'LOT_CHANGE')].copy()
+    
+    # Nettoyage : On s'assure que le numéro de lot a vraiment changé
+    df_lots['Prev_Val'] = df_lots['Value'].shift(1)
+    df_lots = df_lots[df_lots['Value'] != df_lots['Prev_Val']]
+    
+    if df_lots.empty:
+        return []
+
+    # 2. Filtrer les données Résine (Optimisation)
+    # On ne garde que les lignes concernant les tags résine de cet atelier
+    df_resin = df_all[df_all['TagName'].isin(resin_tags)].copy()
+
+    # 3. Boucle sur chaque Lot
+    for i in range(len(df_lots) - 1):
+        # Bornes temporelles du lot
+        t_start = df_lots.iloc[i]['DateTime']
+        lot_id = df_lots.iloc[i]['Value']
+        t_end = df_lots.iloc[i+1]['DateTime']
+        
+        # On récupère tous les points de mesure pour cet intervalle
+        # (Start Lot + Max Shifts + End Lot)
+        mask = (df_resin['DateTime'] >= t_start) & (df_resin['DateTime'] <= t_end)
+        points_in_lot = df_resin[mask]
+        
+        total_kg_lot = 0
+        
+        # Calcul pour chaque compteur (ISO/POL T1/T2...)
+        for tag in resin_tags:
+            # On isole les points de ce compteur spécifique, triés par temps
+            data_tag = points_in_lot[points_in_lot['TagName'] == tag].sort_values('DateTime')
+            vals = data_tag['Value'].values
+            
+            if len(vals) > 1:
+                conso_tag = 0
+                # On parcourt les points point par point
+                for k in range(len(vals) - 1):
+                    v_curr = vals[k]
+                    v_next = vals[k+1]
+                    
+                    diff = v_next - v_curr
+                    
+                    if diff >= 0:
+                        # Cas Normal : Le compteur monte (ex: 100 -> 150)
+                        conso_tag += diff
+                    else:
+                        # Cas Reset : Le compteur a chuté (ex: 500 -> 20)
+                        # v_curr (500) est le MAX atteint avant reset (grâce au script PowerShell)
+                        # v_next (20) est la valeur après reset
+                        # On considère qu'on a consommé les 20kg après le reset
+                        conso_tag += v_next
+                
+                total_kg_lot += conso_tag
+
+        # Ajout du résultat
+        results.append({
+            "Numéro OF": str(int(lot_id)) if lot_id > 0 else "Inconnu",
+            "Début": t_start,
+            "Fin": t_end,
+            "Durée": str(t_end - t_start).split('.')[0], # Format HH:MM:SS
+            "Conso (kg)": total_kg_lot / 1000 # Conversion grammes -> kg
+        })
+        
+    return results
+
+# --- INTERFACE UTILISATEUR ---
+st.sidebar.header("Paramètres")
 
 if st.sidebar.button("🔄 Rafraîchir les données"):
     st.cache_data.clear()
@@ -48,145 +146,61 @@ if st.sidebar.button("🔄 Rafraîchir les données"):
 df = load_data(CSV_URL)
 
 if df is not None:
-    st.sidebar.success("✅ Données chargées depuis GitHub")
-
-    # A. Nettoyage des noms de colonnes
-    df.columns = [c.strip().replace('"', '') for c in df.columns]
+    st.sidebar.success("✅ Données chargées avec succès.")
     
-    # Vérification de sécurité
-    if 'Date_Cible' not in df.columns or 'Valeur' not in df.columns:
-        st.error(f"Colonnes manquantes ! Colonnes trouvées : {list(df.columns)}")
-        st.stop()
-
-    # B. Conversion des Dates
-    df['Date_Cible'] = pd.to_datetime(df['Date_Cible'], dayfirst=True, errors='coerce')
-    df = df.dropna(subset=['Date_Cible'])
-
-    # C. Nettoyage des Nombres
-    def clean_currency(x):
-        if isinstance(x, str):
-            x = x.replace(',', '.')
-            x = x.replace(' ', '')
-            x = ''.join(c for c in x if c.isdigit() or c == '.')
-        return x
-
-    df['Valeur_Clean'] = df['Valeur'].apply(clean_currency)
-    # Conversion en Kg
-    df['Valeur_Kg'] = pd.to_numeric(df['Valeur_Clean'], errors='coerce').fillna(0) / 1000
-
-    # D. Logique "Journée de Production"
-    def get_prod_date(row):
-        dt = row['Date_Cible']
-        # Si c'est le relevé de 05h, il appartient à la veille
-        if dt.hour == 5: 
-            return (dt - datetime.timedelta(days=1)).date()
-        return dt.date()
-
-    df['Jour_Production'] = df.apply(get_prod_date, axis=1)
-
-    # --- 5. SÉLECTEUR DE DATE ---
-    st.sidebar.header("2. Analyse")
-    dates_dispo = sorted(df['Jour_Production'].unique(), reverse=True)
+    # Sélecteur d'atelier
+    atelier_choix = st.selectbox("Choisir l'Atelier :", list(CONFIG_ATELIERS.keys()))
+    config = CONFIG_ATELIERS[atelier_choix]
     
-    if not dates_dispo:
-        st.warning("Aucune date valide trouvée.")
-        st.stop()
-        
-    selected_date = st.sidebar.selectbox("📅 Choisir la Journée de Production :", dates_dispo)
-    
-    # Filtrage sur la date choisie
-    df_jour = df[df['Jour_Production'] == selected_date]
-
-    # --- 6. TABLEAU DE BORD (AMÉLIORÉ) ---
-    st.markdown(f"### Rapport du **{selected_date.strftime('%d/%m/%Y')}**")
-    
-    summary_data = []
-    ateliers_noms = {"CIn": "FX1", "FIn": "FX2", "JInj": "FX3", "LDIn": "FX4"}
-
-    # Variables pour les KPIs globaux
-    total_iso_global = 0
-    total_pol_global = 0
-
-    for atelier_code, display_name in ateliers_noms.items():
-        tags_atelier = TAG_MAPPING.get(atelier_code, [])
-        df_atelier = df_jour[df_jour['TagName'].isin(tags_atelier)]
-        
-        iso_tot = df_atelier[df_atelier['TagName'].str.contains("_ISO_")]['Valeur_Kg'].sum()
-        pol_tot = df_atelier[df_atelier['TagName'].str.contains("_PO_")]['Valeur_Kg'].sum()
-        
-        # Cumul global
-        total_iso_global += iso_tot
-        total_pol_global += pol_tot
-
-        summary_data.append({
-            "Atelier": display_name,
-            "Total ISO (kg)": iso_tot,
-            "Total POL (kg)": pol_tot,
-            "Total (kg)": iso_tot + pol_tot
-        })
-
-    total_journee = total_iso_global + total_pol_global
-
-    # --- A. ZONE KPIS (Indicateurs Clés en haut de page) ---
-    col1, col2, col3 = st.columns(3)
-    col1.metric("🌍 Consommation Totale", f"{total_journee:,.0f} kg")
-    col2.metric("🔵 Total ISO", f"{total_iso_global:,.0f} kg")
-    col3.metric("🔴 Total POL", f"{total_pol_global:,.0f} kg")
-
     st.divider()
-
-    # --- B. ZONE GRAPHIQUE & TABLEAU ---
-    col_graph, col_tab = st.columns([1, 1]) 
+    st.subheader(f"📊 Analyse des Ordres de Fabrication - {atelier_choix}")
     
-    df_summary = pd.DataFrame(summary_data)
-
-    with col_graph:
-        st.subheader("📊 Répartition par Atelier")
-        # Préparation des données pour le graphique (Index = Atelier)
-        chart_data = df_summary.set_index("Atelier")[["Total ISO (kg)", "Total POL (kg)"]]
-        st.bar_chart(chart_data, color=["#36a2eb", "#ff6384"]) # Bleu et Rouge
-
-    with col_tab:
-        st.subheader("📋 Synthèse Chiffrée")
-        format_mapping = {"Total ISO (kg)": "{:.2f}", "Total POL (kg)": "{:.2f}", "Total (kg)": "{:.2f}"}
+    # Lancement du calcul
+    with st.spinner("Calcul des consommations en cours..."):
+        batch_data = calculate_smart_consumption(df, config['Lot_Tag'], config['Resin_Tags'])
+    
+    if batch_data:
+        # Création du tableau de résultats
+        df_res = pd.DataFrame(batch_data)
+        
+        # On met le lot le plus récent en haut
+        df_res = df_res.sort_values('Début', ascending=False)
+        
+        # Affichage du tableau avec mise en forme
         st.dataframe(
-            df_summary.style.format(format_mapping).background_gradient(cmap="Blues", subset=["Total (kg)"]),
-            use_container_width=True,
-            hide_index=True
+            df_res.style.format({
+                "Conso (kg)": "{:.2f}", 
+                "Début": "{:%d/%m/%Y %H:%M}", 
+                "Fin": "{:%d/%m/%Y %H:%M}"
+            })
+            .background_gradient(cmap="Blues", subset=["Conso (kg)"]),
+            use_container_width=True
         )
-
-    # --- C. EXPORT EXCEL/CSV ---
-    st.divider()
-    csv_export = df_summary.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="📥 Télécharger ce rapport en CSV",
-        data=csv_export,
-        file_name=f"Rapport_Resine_{selected_date}.csv",
-        mime="text/csv",
-    )
-
-    # --- D. DÉTAIL TECHNIQUE (Masqué par défaut) ---
-    with st.expander("🔍 Voir le détail technique des compteurs (Preuve)"):
-        st.caption("Données consolidées : 13h30 (J), 21h30 (J) et 05h30 (J+1)")
-        pivot = df_jour.pivot_table(
-            index="TagName", 
-            columns="Heure", 
-            values="Valeur_Kg", 
-            aggfunc='sum'
-        ).fillna(0)
-
-        cols_ordre = [c for c in ["13:30:00", "21:30:00", "05:30:00"] if c in pivot.columns]
-        if cols_ordre:
-            pivot = pivot[cols_ordre]
-
-        st.dataframe(pivot.style.format("{:.2f}"))
+        
+        # Section Indicateurs (KPIs) pour le dernier lot terminé
+        st.divider()
+        st.markdown("### 🔎 Détails du dernier lot terminé")
+        
+        last_lot = df_res.iloc[0]
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Numéro OF", last_lot['Numéro OF'])
+        col2.metric("Durée", last_lot['Durée'])
+        col3.metric("Consommation Totale", f"{last_lot['Conso (kg)']:.2f} kg")
+        
+        # Bouton Export
+        csv = df_res.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Télécharger cet historique en CSV",
+            data=csv,
+            file_name=f"Export_OF_{atelier_choix}.csv",
+            mime="text/csv"
+        )
+        
+    else:
+        st.warning(f"Aucun changement de lot détecté pour {atelier_choix} sur la période.")
+        st.info("Cela peut arriver si la production est à l'arrêt ou si le même OF tourne depuis plus de 10 jours.")
 
 else:
-    # Message d'erreur si chargement impossible
-    st.info("👋 Bonjour !")
-    st.warning(f"Impossible de lire le fichier à l'adresse : {CSV_URL}")
-    st.markdown("""
-    **Pour corriger cela :**
-    1. Assurez-vous que le script PowerShell a bien tourné au moins une fois.
-    2. Vérifiez le lien GitHub dans le code.
-    """)
+    st.error("Impossible de lire le fichier de données.")
+    st.markdown(f"Vérifiez l'URL GitHub : `{CSV_URL}`")
+    st.info("Assurez-vous que le script `SMART_EXTRACT.bat` a bien tourné sur le PC usine.")
